@@ -4,24 +4,25 @@ import os
 
 app = Flask(__name__)
 
-# Проверяем, на месте ли файл (для отладки)
+# Проверка наличия куки
 if os.path.exists('cookies.txt'):
     print("Cookies file found!")
 else:
-    print("WARNING: cookies.txt NOT FOUND!")
+    print("WARNING: cookies.txt NOT FOUND! Authorization may fail.")
 
 ydl_opts = {
-    'format': 'bestaudio/best',
+    # === ИСПРАВЛЕНИЕ ОШИБКИ ФОРМАТА ===
+    # Мы просим формат 140 (это стандартный AAC 128kbps, который есть везде).
+    # Если его нет - любой m4a. Если нет - mp4. И только в конце - любой best.
+    'format': '140/bestaudio[ext=m4a]/best[ext=mp4]/best',
+    
     'noplaylist': True,
     'quiet': True,
     'default_search': 'ytsearch',
     'socket_timeout': 10,
-    
-    # === САМОЕ ГЛАВНОЕ ===
     'cookiefile': 'cookies.txt', 
-    # =====================
     
-    # На всякий случай маскируемся под Android (вместе с куками работает идеально)
+    # Оставляем маскировку
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'web']
@@ -31,7 +32,7 @@ ydl_opts = {
 
 @app.route('/')
 def home():
-    return "Mimik Server (Cookie Version) is Running!"
+    return "Mimik Server (Final AAC Version) is Running!"
 
 @app.route('/play')
 def play_music():
@@ -41,20 +42,28 @@ def play_music():
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"Searching with Cookies for: {query}")
+            print(f"Searching: {query}")
+            # download=False означает "дай мне информацию, но не качай файл на диск"
             info = ydl.extract_info(f"ytsearch1:{query}", download=False)
             
             if 'entries' in info and len(info['entries']) > 0:
                 video_data = info['entries'][0]
-                audio_url = video_data['url']
+                audio_url = video_data.get('url')
                 title = video_data.get('title', 'Unknown')
+                
                 print(f"Found: {title}")
-                return redirect(audio_url, code=302)
+                print(f"URL: {audio_url[:50]}...") # Лог начала ссылки
+                
+                if audio_url:
+                    return redirect(audio_url, code=302)
+                else:
+                    return jsonify({"error": "No URL found in video data"}), 404
             else:
                 return jsonify({"error": "Nothing found"}), 404
                 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"ERROR: {e}")
+        # Выводим ошибку текстом, чтобы было понятно
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
