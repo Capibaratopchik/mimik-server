@@ -10,25 +10,22 @@ else:
     print("WARNING: cookies.txt NOT FOUND!")
 
 ydl_opts = {
-    # Просим 'm4a' (это AAC). Если нет - любой лучший аудиоформат.
-    'format': 'bestaudio[ext=m4a]/best[ext=mp4]/best',
+    # === ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ ===
+    # 1. Мы просим формат 140 (это всегда прямой AAC поток).
+    # 2. [protocol^=http] означает "протокол должен начинаться на http". 
+    #    Это ИСКЛЮЧАЕТ форматы 'm3u8' и 'm3u8_native' (плейлисты).
+    'format': '140[protocol^=http]/bestaudio[protocol^=http][ext=m4a]',
     
     'noplaylist': True,
     'quiet': True,
     'default_search': 'ytsearch',
     'socket_timeout': 10,
-    
-    # Используем куки
-    'cookiefile': 'cookies.txt',
-    
-    # ВАЖНО: Мы УБРАЛИ 'extractor_args' (маскировку под Android).
-    # Теперь yt-dlp будет использовать ваши куки как обычный браузер.
-    # Это решит проблему "Format not available".
+    'cookiefile': 'cookies.txt', 
 }
 
 @app.route('/')
 def home():
-    return "Mimik Server (Browser Mode) is Running!"
+    return "Mimik Server (Direct Stream Mode) is Running!"
 
 @app.route('/play')
 def play_music():
@@ -47,6 +44,7 @@ def play_music():
                 title = video_data.get('title', 'Unknown')
                 
                 print(f"Found: {title}")
+                print(f"Format: {video_data.get('format')}") # Пишем в лог какой формат выбрался
                 
                 if audio_url:
                     return redirect(audio_url, code=302)
