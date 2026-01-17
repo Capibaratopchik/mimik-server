@@ -1,66 +1,95 @@
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, send_file, jsonify
 import yt_dlp
-import subprocess
+import os
+import glob
+import time
+import shutil
 
 app = Flask(__name__)
 
-# Функция для получения прямой ссылки и стриминга через FFMPEG
-def get_audio_stream(query):
-    # Настройки yt-dlp для поиска
+# Папка для временного хранения загрузок
+DOWNLOAD_FOLDER = 'downloads'
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
+
+def cleanup_folder():
+    """Удаляет старые файлы (старше 10 минут), чтобы не забивать диск"""
+    now = time.time()
+    for f in os.listdir(DOWNLOAD_FOLDER):
+        f_path = os.path.join(DOWNLOAD_FOLDER, f)
+        if os.stat(f_path).st_mtime < now - 600: # 600 секунд = 10 минут
+            try:
+                if os.path.isfile(f_path):
+                    os.remove(f_path)
+            except Exception as e:
+                print(f"Ошибка очистки: {e}")
+
+@app.route('/music', methods=['GET'])
+def get_music():
+    # 1. Получаем запрос (например: /music?q=Linkin Park Numb)
+    query = request.args.get('q')
+    if not query:
+        return jsonify({"error": "No query provided"}), 400
+
+    cleanup_folder() # Чистим мусор перед началом
+
+    # Уникальное имя для файла, чтобы запросы не конфликтовали
+    req_id = str(int(time.time() * 1000))
+    output_template = os.path.join(DOWNLOAD_FOLDER, f"{req_id}_%(title)s.%(ext)s")
+
+    # 2. Настройки yt-dlp (взяты из твоего кода)
+    search_string = f"ytsearch1:{query}"
     ydl_opts = {
         'format': 'bestaudio/best',
-        'noplaylist': True,
+        'outtmpl': output_template,
+        # Эмуляция мобильных клиентов для обхода ограничений
+        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
+        # Конвертация в MP3
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192'
+        }],
         'quiet': True,
-        'default_search': 'ytsearch', # Искать на YouTube
+        'nocheckcertificate': True,
     }
 
     try:
+        downloaded_file = None
+        
+        # 3. Скачивание
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Ищем первое видео по запросу
-            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-            if 'entries' in info:
-                video_url = info['entries'][0]['url']
-                title = info['entries'][0]['title']
-                print(f"Found: {title}")
-            else:
-                return None
-
-            # Запускаем FFMPEG для конвертации потока в MP3 на лету
-            # ESP32 любит MP3, 44100Hz, 128k (или меньше для стабильности)
-            command = [
-                'ffmpeg',
-                '-re', 
-                '-i', video_url,
-                '-f', 'mp3',
-                '-acodec', 'libmp3lame',
-                '-ab', '96k',   # Битрейт 96k (легче для WiFi ESP32)
-                '-ac', '1',     # Моно (для одного динамика)
-                '-ar', '44100', # Частота
-                '-'
-            ]
-
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            info = ydl.extract_info(search_string, download=True)
+            if not info.get('entries'):
+                 return jsonify({"error": "Song not found"}), 404
             
-            return process.stdout
+            # Определяем имя скачанного файла (он будет с расширением .mp3)
+            # yt-dlp может немного изменить имя, поэтому ищем по ID запроса
+            list_of_files = glob.glob(os.path.join(DOWNLOAD_FOLDER, f"{req_id}_*.mp3"))
+            if list_of_files:
+                downloaded_file = list_of_files[0]
+
+        if downloaded_file and os.path.exists(downloaded_file):
+            # 4. Отправляем файл пользователю
+            # ВАЖНО: Мы не удаляем файл сразу после return, 
+            # за очистку отвечает функция cleanup_folder при следующем вызове.
+            filename = os.path.basename(downloaded_file)
+            return send_file(
+                downloaded_file, 
+                as_attachment=True, 
+                download_name=filename, 
+                mimetype='audio/mpeg'
+            )
+        else:
+             return jsonify({"error": "Download failed"}), 500
+
     except Exception as e:
-        print(f"Error: {e}")
-        return None
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/stream_music')
-def stream_music():
-    query = request.args.get('q')
-    if not query:
-        return "No query provided", 400
-
-    print(f"Streaming request for: {query}")
-    
-    audio_stream = get_audio_stream(query)
-
-    if not audio_stream:
-        return "Error finding video", 404
-
-    # Возвращаем потоковый ответ
-    return Response(stream_with_context(audio_stream), mimetype="audio/mpeg")
+@app.route('/')
+def home():
+    return "Music Server is Running!"
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    # Запуск сервера на порту 8080
+    app.run(host='0.0.0.0', port=8080)
